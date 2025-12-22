@@ -12,6 +12,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"slices"
 	"strconv"
@@ -481,7 +482,8 @@ type Client struct {
 	// disable automatic RTCP sender reports.
 	DisableRTCPSenderReports bool
 	// explicitly request back channels to the server.
-	RequestBackChannels bool
+	RequestBackChannels            bool
+	DisablePeriodicConnectionCheck bool
 
 	//
 	// system functions (all optional)
@@ -1029,6 +1031,7 @@ func (c *Client) startTransportRoutines() {
 
 	// always enable keepalives unless we are recording with TCP
 	if c.state == clientStatePlay || c.setuppedTransport.Protocol != ProtocolTCP {
+		slog.Info("enabling keepalives", "baseURL", c.baseURL.String(), "protocol", transportLabels[*c.Protocol])
 		c.keepAliveTimer = time.NewTimer(c.keepAlivePeriod)
 	}
 
@@ -1295,6 +1298,10 @@ func (c *Client) isInTCPTimeout() bool {
 }
 
 func (c *Client) doCheckTimeout() error {
+	if c.DisablePeriodicConnectionCheck {
+		return nil
+	}
+
 	if c.setuppedTransport.Protocol == ProtocolUDP ||
 		c.setuppedTransport.Protocol == ProtocolUDPMulticast {
 		if c.checkTimeoutInitial && !c.backChannelSetupped && c.Protocol == nil {
@@ -1317,6 +1324,7 @@ func (c *Client) doCheckTimeout() error {
 }
 
 func (c *Client) doKeepAlive() error {
+	slog.Info("sending keepalive", "baseURL", c.baseURL.String(), "protocol", transportLabels[*c.Protocol])
 	// some cameras do not reply to keepalives, do not wait for responses.
 	_, err := c.do(&base.Request{
 		Method: func() base.Method {
@@ -1328,7 +1336,8 @@ func (c *Client) doKeepAlive() error {
 		}(),
 		// use the stream base URL, otherwise some cameras do not reply
 		URL: c.baseURL,
-	}, true)
+	}, false)
+	slog.Info("sent keepalive", "err", err, "baseURL", c.baseURL.String(), "protocol", transportLabels[*c.Protocol])
 	return err
 }
 
