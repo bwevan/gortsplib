@@ -546,6 +546,8 @@ type Client struct {
 	tcpLastFrameTime     *int64
 	keepAlivePeriod      time.Duration
 	keepAliveTimer       *time.Timer
+	keepAliveInitialSent bool
+	keepAliveExpectResp  bool
 	closeError           error
 	writerMutex          sync.RWMutex
 	writer               *asyncprocessor.Processor
@@ -959,6 +961,8 @@ func (c *Client) reset() {
 	c.stdChannelSetupped = false
 	c.setuppedMedias = nil
 	c.tcpCallbackByChannel = nil
+	c.keepAliveInitialSent = false
+	c.keepAliveExpectResp = false
 }
 
 func (c *Client) checkState(allowed map[clientState]struct{}) error {
@@ -1316,8 +1320,7 @@ func (c *Client) doCheckTimeout() error {
 	return nil
 }
 
-func (c *Client) doKeepAlive() error {
-	// some cameras do not reply to keepalives, do not wait for responses.
+func (c *Client) doKeepAliveWithSkipResponse(skipResponse bool) error {
 	_, err := c.do(&base.Request{
 		Method: func() base.Method {
 			// the VLC integrated rtsp server requires GET_PARAMETER
@@ -1328,8 +1331,38 @@ func (c *Client) doKeepAlive() error {
 		}(),
 		// use the stream base URL, otherwise some cameras do not reply
 		URL: c.baseURL,
-	}, true)
+	}, skipResponse)
 	return err
+}
+
+func (c *Client) doInitialKeepAlive() error {
+	err := c.doKeepAliveWithSkipResponse(false)
+	if err == nil {
+		c.keepAliveExpectResp = true
+		return nil
+	}
+
+	err = c.doKeepAliveWithSkipResponse(true)
+	if err == nil {
+		c.keepAliveExpectResp = false
+		return nil
+	}
+
+	return err
+}
+
+func (c *Client) doKeepAlive() error {
+	if !c.keepAliveInitialSent {
+		// Send initial keep-alive to check if camera responds to keep-alive requests
+		// If it does, we expect keep-alive responses, otherwise we do not expect them
+		return c.doInitialKeepAlive()
+	}
+
+	if c.keepAliveExpectResp {
+		return c.doKeepAliveWithSkipResponse(false)
+	}
+
+	return c.doKeepAliveWithSkipResponse(true)
 }
 
 func (c *Client) doOptions(u *base.URL) (*base.Response, error) {
