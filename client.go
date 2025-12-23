@@ -482,6 +482,8 @@ type Client struct {
 	DisableRTCPSenderReports bool
 	// explicitly request back channels to the server.
 	RequestBackChannels bool
+	// Timeout to wait for RTP/RTCP packets before the connection is considered timed out.
+	RTPTimeout time.Duration
 
 	//
 	// system functions (all optional)
@@ -541,6 +543,7 @@ type Client struct {
 	setuppedMedias       map[*description.Media]*clientMedia
 	tcpCallbackByChannel map[int]readFunc
 	lastRange            *headers.Range
+	checkTimeout         time.Duration
 	checkTimeoutTimer    *time.Timer
 	checkTimeoutInitial  bool
 	tcpLastFrameTime     *int64
@@ -648,6 +651,9 @@ func (c *Client) Start() error {
 		c.OnDecodeError = func(err error) {
 			log.Println(err.Error())
 		}
+	}
+	if c.RTPTimeout == 0 {
+		c.RTPTimeout = c.ReadTimeout
 	}
 
 	// private
@@ -1280,12 +1286,12 @@ func (c *Client) isInUDPTimeout() bool {
 	now := c.timeNow()
 	for _, ct := range c.setuppedMedias {
 		lft := time.Unix(atomic.LoadInt64(ct.udpRTPListener.lastPacketTime), 0)
-		if now.Sub(lft) < c.ReadTimeout {
+		if now.Sub(lft) < c.RTPTimeout {
 			return false
 		}
 
 		lft = time.Unix(atomic.LoadInt64(ct.udpRTCPListener.lastPacketTime), 0)
-		if now.Sub(lft) < c.ReadTimeout {
+		if now.Sub(lft) < c.RTPTimeout {
 			return false
 		}
 	}
@@ -1295,7 +1301,7 @@ func (c *Client) isInUDPTimeout() bool {
 func (c *Client) isInTCPTimeout() bool {
 	now := c.timeNow()
 	lft := time.Unix(atomic.LoadInt64(c.tcpLastFrameTime), 0)
-	return now.Sub(lft) >= c.ReadTimeout
+	return now.Sub(lft) >= c.RTPTimeout
 }
 
 func (c *Client) doCheckTimeout() error {
